@@ -1,23 +1,26 @@
 import base64
 import datetime
 import distutils.version
-import random
-import os
 import json
+import os
+import random
 import yaml
 import datetime
 
 from lbrynet.core.cryptoutils import get_lbry_hash_obj
 
+
 blobhash_length = get_lbry_hash_obj().digest_size * 2  # digest_size is in bytes, and blob hashes are hex encoded
 
 
-# defining this here allows for easier overriding in testing
+# defining these time functions here allows for easier overriding in testing
 def now():
     return datetime.datetime.now()
 
+
 def utcnow():
     return datetime.datetime.utcnow()
+
 
 def isonow():
     """Return utc now in isoformat with timezone"""
@@ -36,6 +39,10 @@ def generate_id(num=None):
     return h.digest()
 
 
+def is_valid_hashcharacter(char):
+    return char in "0123456789abcdef"
+
+
 def is_valid_blobhash(blobhash):
     """
     @param blobhash: string, the blobhash to check
@@ -44,10 +51,7 @@ def is_valid_blobhash(blobhash):
     """
     if len(blobhash) != blobhash_length:
         return False
-    for l in blobhash:
-        if l not in "0123456789abcdef":
-            return False
-    return True
+    return all(is_valid_hashcharacter(l) for l in blobhash)
 
 
 def version_is_greater_than(a, b):
