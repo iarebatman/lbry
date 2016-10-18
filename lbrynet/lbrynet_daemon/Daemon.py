@@ -128,6 +128,22 @@ BAD_REQUEST = 400
 NOT_FOUND = 404
 OK_CODE = 200
 
+
+class Checker:
+    """The looping calls the daemon runs"""
+    INTERNET_CONNECTION = 'internet_connection_checker'
+    VERSION = 'version_checker'
+    CONNECTION_PROBLEM = 'connection_problem_checker'
+    PENDING_CLAIM = 'pending_claim_checker'
+
+
+class FileID:
+    """The different ways a file can be identified"""
+    NAME = 'name'
+    SD_HASH = 'sd_hash'
+    FILE_NAME = 'file_name'
+
+
 # TODO add login credentials in a conf file
 # TODO alert if your copy of a lbry file is out of date with the name record
 
@@ -138,7 +154,7 @@ class Parameters(object):
 
 class CheckInternetConnection(object):
     REMOTE_SERVER = "www.google.com"
-    
+
     def __init__(self, daemon):
         self.daemon = daemon
 
@@ -159,7 +175,7 @@ class CheckRemoteVersions(object):
     def __call__(self):
         d = self._get_lbrynet_version()
         d.addCallback(lambda _: self._get_lbryum_version())
-        
+
     def _get_lbryum_version(self):
         try:
             version = get_lbryum_version_from_github()
@@ -201,6 +217,8 @@ class AlwaysSend(object):
         d = defer.maybeDeferred(self.value_generator, *self.args, **self.kwargs)
         d.addCallback(lambda v: (True, v))
         return d
+
+
 
 
 def calculate_available_blob_size(blob_manager):
@@ -426,15 +444,13 @@ class Daemon(jsonrpc.JSONRPC):
         self.wallet_user = None
         self.wallet_password = None
 
-        self.looping_call_manager = LoopingCallManager()
-        looping_calls = [
-            ('internet_connection_checker', CheckInternetConnection(self)),
-            ('version_checker', CheckRemoteVersions(self)),
-            ('connection_problem_checker', self._check_connection_problems),
-            ('pending_claim_checker', self._check_pending_claims),
-        ]
-        for name, fn in looping_calls:
-            self.looping_call_manager.register_looping_call(name, LoopingCall(fn))
+        calls = {
+            Checker.INTERNET_CONNECTION: LoopingCall(CheckInternetConnection(self)),
+            Checker.VERSION: LoopingCall(CheckRemoteVersions(self)),
+            Checker.CONNECTION_PROBLEM: LoopingCall(self._check_connection_problems),
+            Checker.PENDING_CLAIM: LoopingCall(self._check_pending_claims),
+        }
+        self.looping_call_manager = LoopingCallManager(calls)
 
         self.sd_identifier = StreamDescriptorIdentifier()
         self.stream_info_manager = TempEncryptedFileMetadataManager()
@@ -599,9 +615,9 @@ class Daemon(jsonrpc.JSONRPC):
 
         log.info("Starting lbrynet-daemon")
 
-        self.looping_call_manager.start('internet_connection_checker', 3600)
-        self.looping_call_manager.start('version_checker', 3600 * 12)
-        self.looping_call_manager.start('connection_problem_checker', 1)
+        self.looping_call_manager.start(Checker.INTERNET_CONNECTION, 3600)
+        self.looping_call_manager.start(Checker.VERSION, 3600 * 12)
+        self.looping_call_manager.start(Checker.CONNECTION_PROBLEM, 1)
         self.exchange_rate_manager.start()
 
         if host_ui:
@@ -695,7 +711,7 @@ class Daemon(jsonrpc.JSONRPC):
 
         def _get_and_start_file(name):
             d = defer.succeed(self.pending_claims.pop(name))
-            d.addCallback(lambda _: self._get_lbry_file("name", name, return_json=False))
+            d.addCallback(lambda _: self._get_lbry_file(FileID.NAME, name, return_json=False))
             d.addCallback(lambda l: _start_file(l) if l.stopped else "LBRY file was already running")
 
         def re_add_to_pending_claims(name):
@@ -1283,7 +1299,7 @@ class Daemon(jsonrpc.JSONRPC):
             return defer.fail(Exception("no lbry file given to reflect"))
 
         stream_hash = lbry_file.stream_hash
-        
+
         if stream_hash is None:
             return defer.fail(Exception("no stream hash"))
 
@@ -1942,7 +1958,7 @@ class Daemon(jsonrpc.JSONRPC):
             metadata = p['metadata']
             file_path = p['file_path']
 
-        self.looping_call_manager.start('pending_claim_checker', 30)
+        self.looping_call_manager.start(Checker.PENDING_CLAIM, 30)
 
         d = self._resolve_name(name, force_refresh=True)
         d.addErrback(lambda _: None)
@@ -2787,11 +2803,11 @@ class _GetFileHelper(object):
         return d
 
     def search_for_file(self):
-        if self.search_by == "name":
+        if self.search_by == FileID.NAME:
             return self.daemon._get_lbry_file_by_uri(self.val)
-        elif self.search_by == "sd_hash":
+        elif self.search_by == FileID.SD_HASH:
             return self.daemon._get_lbry_file_by_sd_hash(self.val)
-        elif self.search_by == "file_name":
+        elif self.search_by == FileID.FILE_NAME:
             return self.daemon._get_lbry_file_by_file_name(self.val)
         raise Exception('{} is not a valid search operation'.format(self.search_by))
 
@@ -2817,7 +2833,7 @@ class _GetFileHelper(object):
             d = defer.succeed(
                 self._get_properties_dict(lbry_file, code, message, written_bytes, size))
         return d
-    
+
     def _get_msg_for_file_status(self, file_status):
         message = STREAM_STAGES[2][1] % (
             file_status.name, file_status.num_completed, file_status.num_known,
@@ -2831,7 +2847,7 @@ class _GetFileHelper(object):
         return os.path.join(lbry_file.download_directory, lbry_file.file_name)
 
     def _get_status(self, lbry_file):
-        if self.search_by == "name":
+        if self.search_by == FileID.NAME:
             if self.val in self.daemon.streams.keys():
                 status = self.daemon.streams[self.val].code
             elif lbry_file in self.daemon.lbry_file_manager.lbry_files:
@@ -2851,7 +2867,7 @@ class _GetFileHelper(object):
         else:
             written_bytes = False
         return written_bytes
-    
+
     def _get_properties_dict(self, lbry_file, code, message, written_bytes, size):
         key = self._get_key(lbry_file)
         full_path = self._full_path(lbry_file)
